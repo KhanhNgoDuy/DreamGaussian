@@ -1,5 +1,6 @@
 from diffusers import DDIMScheduler
 import torchvision.transforms.functional as TF
+from torchvision import transforms
 
 import numpy as np
 import torch
@@ -15,12 +16,13 @@ from zero123 import Zero123Pipeline
 
 
 class Zero123(nn.Module):
-    def __init__(self, device, fp16=True, t_range=[0.02, 0.98], model_key="ashawkey/zero123-xl-diffusers"):
+    def __init__(self, device, fp16=True, t_range=[0.02, 0.98], model_key="ashawkey/zero123-xl-diffusers", train=False):
         super().__init__()
 
         self.device = device
         self.fp16 = fp16
         self.dtype = torch.float16 if fp16 else torch.float32
+        self.train = train
 
         assert self.fp16, 'Only zero123 fp16 is supported for now.'
 
@@ -176,20 +178,52 @@ class Zero123(nn.Module):
         # decode_img = self.decode_latents(latents)
         # loss += self.perceptual_loss(decode_img, pred_rgb_256).sum() / batch_size
 
-        # multi-step SDS loss
-        # edit_latents = self.multi_step_SDS(latents, cc_emb, vae_emb, t,
-        #                                    guidance_scale, steps=50, strength=(step_ratio*0.15+0.8), 
-        #                                    default_elevation=default_elevation)
-        # edit_images = self.decode_latents(edit_latents)
-        # gt_rgb_BCHW = F.interpolate(edit_images, (H, W), mode='bilinear')
+        return loss
+    
+    def forward(self, pred_rgb, elevation, azimuth, radius, step_ratio=None, guidance_scale=5, as_latent=False, default_elevation=0):
+        # pred_rgb: tensor [1, 3, H, W] in [0, 1]
+        batch_size, C, H, W = pred_rgb.shape        # [1, 3, 128, 128]
 
-        loss_f = loss_l1 = loss_p = 0
+        if as_latent:
+            latents = F.interpolate(pred_rgb, (32, 32), mode='bilinear', align_corners=False) * 2 - 1
+        else:
+            pred_rgb_256 = F.interpolate(pred_rgb, (256, 256), mode='bilinear', align_corners=False)
+            latents = self.encode_imgs(pred_rgb_256.to(self.dtype))
 
-        # loss_f = F.mse_loss(latents, edit_latents.detach(), reduction="sum") / batch_size
-        # loss_l1 = F.l1_loss(pred_rgb, gt_rgb_BCHW.detach(), reduction='sum') / batch_size
-        # loss_p = self.perceptual_loss(pred_rgb, gt_rgb_BCHW.detach()).sum() / batch_size
-        
-        loss += (loss_f + loss_l1 + loss_p) / 2
+        assert step_ratio == None    
+        t = torch.randint(self.min_step, self.max_step + 1, (batch_size,), dtype=torch.long, device=self.device)
+
+        w = (1 - self.alphas[t]).view(batch_size, 1, 1, 1)
+
+        noise = torch.randn_like(latents)
+        latents_noisy = self.scheduler.add_noise(latents, noise, t)
+
+        x_in = torch.cat([latents_noisy] * 2)
+        t_in = torch.cat([t] * 2)
+
+        T = self.get_cam_embeddings(elevation, azimuth, radius, default_elevation)
+        cc_emb = torch.cat([self.embeddings[0].repeat(batch_size, 1, 1), T], dim=-1)
+        cc_emb = self.pipe.clip_camera_projection(cc_emb)
+        cc_emb = torch.cat([cc_emb, torch.zeros_like(cc_emb)], dim=0)
+
+        vae_emb = self.embeddings[1].repeat(batch_size, 1, 1, 1)
+        vae_emb = torch.cat([vae_emb, torch.zeros_like(vae_emb)], dim=0)
+
+        # gradient for unet
+        noise_pred = self.unet(
+            torch.cat([x_in, vae_emb], dim=1),
+            t_in.to(self.unet.dtype),
+            encoder_hidden_states=cc_emb,
+        ).sample
+
+        noise_pred_cond, noise_pred_uncond = noise_pred.chunk(2)
+        noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
+
+        # grad = w * (noise_pred - noise)
+        # grad = torch.nan_to_num(grad)
+
+        # target = (latents - grad).detach()
+        loss = F.mse_loss(noise_pred, noise, reduction='sum')
 
         return loss
     
@@ -239,9 +273,10 @@ class Zero123(nn.Module):
             image_camera_embeddings=image_camera_embeddings,
             return_dict=return_dict
         )['images']
-        
-        for i, image in enumerate(images):
-            image.save(f'{i}.jpg')
+
+        img_list = [transforms.ToTensor()(img).float().to(self.device) for img in images]
+
+        return img_list
 
 
 if __name__ == '__main__':

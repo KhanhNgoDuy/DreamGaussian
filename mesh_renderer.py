@@ -52,7 +52,7 @@ class Renderer(nn.Module):
         #     self.glctx = dr.RasterizeGLContext()
         # else:
         #     self.glctx = dr.RasterizeCudaContext()
-        self.glctx = dr.RasterizeCudaContext()      # Self-Added
+        self.glctx = dr.RasterizeCudaContext()      # Khanh
         
         # extract trainable parameters
         self.v_offsets = nn.Parameter(torch.zeros_like(self.mesh.v))

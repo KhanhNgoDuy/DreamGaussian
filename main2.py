@@ -21,6 +21,7 @@ from mesh_renderer import Renderer
 from loss.vgg_face.vgg_face_dag import VGGLoss
 
 from time import perf_counter
+import random
 
 
 class GUI:
@@ -177,15 +178,12 @@ class GUI:
         ender = torch.cuda.Event(enable_timing=True)
         starter.record()
 
-
         for _ in range(self.train_steps):
 
             self.step += 1
-            step_ratio = min(1, self.step / self.opt.iters_refine)
+            step_ratio = min(1, self.step / self.opt.iters_refine_back)
 
             loss = 0
-
-
 
             ### known view
             if self.input_img_torch is not None and not self.opt.imagedream:
@@ -195,10 +193,16 @@ class GUI:
 
                 # rgb loss
                 image = out["image"] # [H, W, 3] in [0, 1]
+                # to_pil_image(image.squeeze(0).permute(2, 0, 1)).save(f'known_{self.step}.jpg')
                 valid_mask = ((out["alpha"] > 0) & (out["viewcos"] > 0.5)).detach()
+                _mask = valid_mask.permute(2, 0, 1).squeeze(0)
+
+                # if self.step % 10 == 0:
+                #     self.to_mask(_mask).save(f'known_{self.step}.jpg')
+
                 # loss = loss + F.mse_loss(image * valid_mask, self.input_img_torch_channel_last * valid_mask)
-                loss = loss + 1 * F.l1_loss(image * valid_mask, self.input_img_torch_channel_last * valid_mask)
-                loss = loss + 6 * self.vgg_face_loss(
+                loss = loss + 0 * F.l1_loss(image * valid_mask, self.input_img_torch_channel_last * valid_mask)
+                loss = loss + 0 * self.vgg_face_loss(
                     (image * valid_mask).permute(2, 0, 1).unsqueeze(0), 
                     (self.input_img_torch_channel_last * valid_mask).permute(2, 0, 1).unsqueeze(0)
                 )
@@ -231,60 +235,58 @@ class GUI:
 
                 image = out["image"] # [H, W, 3] in [0, 1]
                 image = image.permute(2,0,1).contiguous().unsqueeze(0) # [1, 3, H, W] in [0, 1]
+                # to_pil_image(image.squeeze(0)).save(f'novel_{self.step}.jpg')
 
                 images.append(image)
-
-                # enable mvdream training
-                if self.opt.mvdream or self.opt.imagedream:
-                    for view_i in range(1, 4):
-                        pose_i = orbit_camera(self.opt.elevation + ver, hor + 90 * view_i, self.opt.radius + radius)
-                        poses.append(pose_i)
-
-                        out_i = self.renderer.render(pose_i, self.cam.perspective, render_resolution, render_resolution, ssaa=ssaa)
-
-                        image = out_i["image"].permute(2,0,1).contiguous().unsqueeze(0) # [1, 3, H, W] in [0, 1]
-                        images.append(image)
 
             images = torch.cat(images, dim=0)
             poses = torch.from_numpy(np.stack(poses, axis=0)).to(self.device)
 
-            # import kiui
-            # kiui.lo(hor, ver)
-            # kiui.vis.plot_image(image)
-
-
-            # sample novel views from zero123
-
-            sample_resolution = 512
-            print(vers, hors)
-            gt_image = F.interpolate(self.input_img_torch, (sample_resolution, sample_resolution))
-            results = self.guidance_zero123.sample(
-                gt_image, vers, hors, radii, sample_resolution, sample_resolution)       # takes ~11.5s
-
             # guidance loss
             strength = step_ratio * 0.15 + 0.8
-            if self.enable_sd:
-                if self.opt.mvdream or self.opt.imagedream:
-                    # loss = loss + self.opt.lambda_sd * self.guidance_sd.train_step(images, poses, step_ratio)
-                    refined_images = self.guidance_sd.refine(images, poses, strength=strength).float()
-                    refined_images = F.interpolate(refined_images, (render_resolution, render_resolution), mode="bilinear", align_corners=False)
-                    loss = loss + self.opt.lambda_sd * F.mse_loss(images, refined_images)
-                else:
-                    # loss = loss + self.opt.lambda_sd * self.guidance_sd.train_step(images, step_ratio)
-                    refined_images = self.guidance_sd.refine(images, strength=strength).float()
-                    refined_images = F.interpolate(refined_images, (render_resolution, render_resolution), mode="bilinear", align_corners=False)
-                    loss = loss + self.opt.lambda_sd * F.mse_loss(images, refined_images)
 
             if self.enable_zero123:
                 # loss = loss + self.opt.lambda_zero123 * self.guidance_zero123.train_step(images, vers, hors, radii, step_ratio)
                 refined_images = self.guidance_zero123.refine(images, vers, hors, radii, strength=strength, default_elevation=self.opt.elevation).float()
                 refined_images = F.interpolate(refined_images, (render_resolution, render_resolution), mode="bilinear", align_corners=False)
                 loss = loss + self.opt.lambda_zero123 * F.mse_loss(images, refined_images)
-                # loss = loss + self.opt.lambda_zero123 * self.lpips_loss(images, refined_images)
-                pil_img = to_pil_image(refined_images[0])
-                pil_img.save('00.jpg')
-                exit()
 
+            if self.opt.sample_zero123:
+                ### loss of sampled views from zero123            
+                images = []
+                down_resolution = self.sample_resolution // 1
+
+                # for i, (ver, hor, radius) in enumerate(zip(self.sample_vers, self.sample_hors, self.sample_radii)):
+                for hor in self.sample_hors:
+                    for ver in self.sample_vers:
+                        pose = orbit_camera(self.opt.elevation + ver, hor, self.opt.radius + self.sample_radius)
+                        ssaa = min(2.0, max(0.125, 2 * np.random.random()))
+                        out = self.renderer.render(pose, self.cam.perspective, self.sample_resolution, self.sample_resolution, ssaa=ssaa)
+
+                        image = out["image"] # [H, W, 3] in [0, 1]
+                        valid_mask = ((out["alpha"] > 0) & (out["viewcos"] > 0.5)).detach().permute(2, 0, 1).unsqueeze(0)
+                        image = image.permute(2, 0, 1).contiguous().unsqueeze(0) # [1, 3, H, W] in [0, 1]
+                        images.append(image)
+
+                # Each view is a list of samples from zero123
+                for view, image in zip(self.sampled_views, images):                    
+                    for sample in view:
+                        image = image * valid_mask
+                        sample = sample * valid_mask
+
+                        lr_image = F.interpolate(image, (down_resolution, down_resolution), mode="bilinear", align_corners=False)
+                        lr_sample = F.interpolate(sample, (down_resolution, down_resolution), mode="bilinear", align_corners=False)
+
+                        # if self.step % 10 == 0 and i == 1:
+                        #     self.to_mask(valid_mask.squeeze(0).squeeze(0)).save(f'novel_{self.step}.jpg')
+                        #     to_pil_image(image_stack.squeeze(0)).save(f'render_{self.step}_{i}.jpg')
+                        #     to_pil_image(view.squeeze(0)).save(f'novel_{i}.jpg')
+
+                        l1_loss = F.l1_loss(lr_image, lr_sample)
+                        # vgg_loss = self.vgg_face_loss(image, sample)
+
+                        loss = loss + .1 * l1_loss / len(view)
+                        # loss = loss + 6 * vgg_loss
 
             # optimize step
             loss.backward()
@@ -303,13 +305,6 @@ class GUI:
                 "_log_train_log",
                 f"step = {self.step: 5d} (+{self.train_steps: 2d}) loss = {loss.item():.4f}",
             )
-
-        # dynamic train steps (no need for now)
-        # max allowed train time per-frame is 500 ms
-        # full_t = t / self.train_steps * 16
-        # train_steps = min(16, max(4, int(16 * 500 / full_t)))
-        # if train_steps > self.train_steps * 1.2 or train_steps < self.train_steps * 0.8:
-        #     self.train_steps = train_steps
 
     @torch.no_grad()
     def test_step(self):
@@ -706,11 +701,61 @@ class GUI:
     def train(self, iters=500):
         if iters > 0:
             self.prepare_train()
+            start = perf_counter()
+            if self.opt.sample_zero123:
+                self.sampled_views = self.sample_zero123()
+            print(f'Sampling time: {perf_counter() - start}')
             for i in tqdm.trange(iters):
                 self.train_step()
         # save
         self.save_model()
+
+    # sample novel views from zero123
+    def sample_zero123(self):
+        hor_min, hor_max, hor_step = (120, 180, 30)
+        # ver_min, ver_max, ver_step = (-85, 0, 25)
+        self.sample_resolution = 256    # do not change this value
+        num_images_per_prompt = self.opt.n_samples
+
+        self.sample_hors = list(range(hor_min, hor_max, hor_step)) + list(range(-hor_min, -hor_max, -hor_step)) + [180]
+        # self.sample_vers = list(range(ver_min, ver_max, ver_step)) + list(range(-ver_min, -ver_max, -ver_step)) + [0]
+        self.sample_vers = [15, -15, -45]
+        # self.sample_radii = [0] * len(self.sample_hors)
+        self.sample_radius = 0
         
+        # self.sample_resolution = 256    # do not change this value
+        # self.sample_vers = list(range(-90, 90, 15))
+        # self.sample_hors = [180] * len(self.sample_vers)
+        # self.sample_radii = [0] * len(self.sample_hors)
+        # num_images_per_prompt = 3
+
+        print(f'[INFO] Sampling {num_images_per_prompt} images for {len(self.sample_hors) * len(self.sample_vers)} views')
+
+        gt_image = F.interpolate(self.input_img_torch, (self.sample_resolution, self.sample_resolution), mode="bilinear", align_corners=False)
+        views = []
+        
+        # for (ver, hor, radius) in zip(self.sample_vers, self.sample_hors, self.sample_radii):
+        for i, hor in enumerate(self.sample_hors):
+            for j, ver in enumerate(self.sample_vers):
+                print(f'[{ver}, {hor}]')
+                view = self.guidance_zero123.sample(
+                    gt_image, [ver], [hor], [self.sample_radius], self.sample_resolution, self.sample_resolution,
+                    num_images_per_prompt=num_images_per_prompt  
+                )
+                views.append(view)
+
+                # for sample in view:
+                #     to_pil_image(sample.squeeze(0)).save(f'sample_{i}_{j}.jpg')
+
+        return views
+    
+    # Convert a [H, W] tensor to masked PIL Image
+    def to_mask(self, tensor):
+        mask = tensor.cpu().numpy()
+        mask = (mask * 255).astype(np.uint8)
+        image = Image.fromarray(mask)
+        return image
+
 
 if __name__ == "__main__":
     import argparse
@@ -736,4 +781,4 @@ if __name__ == "__main__":
     if opt.gui:
         gui.render()
     else:
-        gui.train(opt.iters_refine)
+        gui.train(opt.iters_refine_back)
