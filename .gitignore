@@ -6,6 +6,7 @@ venv_*/
 .vs/
 .vscode/
 .idea/
+lightning_logs/
 loss/models
 
 tmp_*
