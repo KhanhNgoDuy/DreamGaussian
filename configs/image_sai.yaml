@@ -1,3 +1,12 @@
+### Khanh
+# head template
+use_head_template: False
+default_head_template: templates/anne.obj
+
+# samples from zero123
+sample_zero123: True
+n_samples: 12
+
 ### Input
 # input rgba image path (default to None, can be load in GUI too)
 input: 
@@ -37,7 +46,8 @@ iters: 500
 # whether to linearly anneal timestep
 anneal_timestep: True
 # training iterations for stage 2
-iters_refine: 50
+iters_refine_back: 20
+iters_refine_front: 50
 # training camera radius
 radius: 2
 # training camera fovy

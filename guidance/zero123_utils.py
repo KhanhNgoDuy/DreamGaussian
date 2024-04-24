@@ -45,6 +45,9 @@ class Zero123(nn.Module):
 
         self.vae = self.pipe.vae
         self.unet = self.pipe.unet
+        
+        # for m in self.children():
+        #     m.apply(self.init_weights)
 
         self.pipe.set_progress_bar_config(disable=True)
 
@@ -166,6 +169,8 @@ class Zero123(nn.Module):
 
         noise_pred_cond, noise_pred_uncond = noise_pred.chunk(2)
         noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
+        # print(noise_pred_cond)
+        # print(noise_pred_uncond)
 
         # SDS loss
         grad = w * (noise_pred - noise)
@@ -173,6 +178,8 @@ class Zero123(nn.Module):
 
         target = (latents - grad).detach()
         loss = F.mse_loss(latents.float(), target, reduction='sum')
+        print(loss.item())
+        exit()
 
         ## Perceptual loss
         # decode_img = self.decode_latents(latents)
@@ -255,28 +262,42 @@ class Zero123(nn.Module):
                guidance_scale = 7.5, 
                num_images_per_prompt = 3,
                clip_image_embeddings = None, 
-               image_camera_embeddings = None,
+            #    image_camera_embeddings = None,
                return_dict = True
     ):  
         """
         Return a list of PIL images
         The number of returned images is `num_images_per_prompt`
         """
+        elevation = [i if i<=180 else i - 360 for i in elevation]
+        azimuth = [i if i<=180 else i - 360 for i in azimuth]
+
         elevation = torch.tensor(elevation)
         azimuth = torch.tensor(azimuth)
         distance = torch.tensor(distance)
+
+        T = self.get_cam_embeddings(elevation, azimuth, distance)
+        cc_emb = torch.cat([self.embeddings[0].repeat(1, 1, 1), T], dim=-1)
+        cc_emb = self.pipe.clip_camera_projection(cc_emb)
 
         images = self.pipe(
             image, elevation, azimuth, distance, height, width, 
             num_inference_step, guidance_scale, num_images_per_prompt, 
             clip_image_embeddings=clip_image_embeddings, 
-            image_camera_embeddings=image_camera_embeddings,
+            image_camera_embeddings=cc_emb,
             return_dict=return_dict
         )['images']
 
         img_list = [transforms.ToTensor()(img).float().to(self.device) for img in images]
 
         return img_list
+    
+    @staticmethod
+    def init_weights(m):
+        if isinstance(m, nn.Linear):
+            nn.init.normal_(m.weight)
+        elif isinstance(m, nn.Conv2d):
+            nn.init.normal_(m.weight)
 
 
 if __name__ == '__main__':

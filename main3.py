@@ -249,44 +249,7 @@ class GUI:
                 # loss = loss + self.opt.lambda_zero123 * self.guidance_zero123.train_step(images, vers, hors, radii, step_ratio)
                 refined_images = self.guidance_zero123.refine(images, vers, hors, radii, strength=strength, default_elevation=self.opt.elevation).float()
                 refined_images = F.interpolate(refined_images, (render_resolution, render_resolution), mode="bilinear", align_corners=False)
-                loss = loss + 2 * self.opt.lambda_zero123 * F.mse_loss(images, refined_images)
-
-            # if self.opt.sample_zero123:
-            #     ### loss of sampled views from zero123            
-            #     images = []
-            #     down_resolution = self.sample_resolution // 1
-
-            #     # for i, (ver, hor, radius) in enumerate(zip(self.sample_vers, self.sample_hors, self.sample_radii)):
-            #     for hor in self.sample_hors:
-            #         for ver in self.sample_vers:
-            #             pose = orbit_camera(self.opt.elevation + ver, hor, self.opt.radius + self.sample_radius)
-            #             ssaa = min(2.0, max(0.125, 2 * np.random.random()))
-            #             out = self.renderer.render(pose, self.cam.perspective, self.sample_resolution, self.sample_resolution, ssaa=ssaa)
-
-            #             image = out["image"] # [H, W, 3] in [0, 1]
-            #             valid_mask = ((out["alpha"] > 0) & (out["viewcos"] > 0.5)).detach().permute(2, 0, 1).unsqueeze(0)
-            #             image = image.permute(2, 0, 1).contiguous().unsqueeze(0) # [1, 3, H, W] in [0, 1]
-            #             images.append(image)
-
-            #     # Each view is a list of samples from zero123
-            #     for view, image in zip(self.sampled_views, images):                    
-            #         for sample in view:
-            #             image = image * valid_mask
-            #             sample = sample * valid_mask
-
-            #             lr_image = F.interpolate(image, (down_resolution, down_resolution), mode="bilinear", align_corners=False)
-            #             lr_sample = F.interpolate(sample, (down_resolution, down_resolution), mode="bilinear", align_corners=False)
-
-            #             # if self.step % 10 == 0 and i == 1:
-            #             #     self.to_mask(valid_mask.squeeze(0).squeeze(0)).save(f'novel_{self.step}.jpg')
-            #             #     to_pil_image(image_stack.squeeze(0)).save(f'render_{self.step}_{i}.jpg')
-            #             #     to_pil_image(view.squeeze(0)).save(f'novel_{i}.jpg')
-
-            #             l1_loss = F.l1_loss(lr_image, lr_sample)
-            #             # vgg_loss = self.vgg_face_loss(image, sample)
-
-            #             loss = loss + .1 * l1_loss / len(view)
-            #             # loss = loss + 6 * vgg_loss
+                loss = loss + self.opt.lambda_zero123 * F.mse_loss(images, refined_images)
 
             # optimize step
             loss.backward()

@@ -148,8 +148,10 @@ class GUI:
             print(f"[INFO] loading zero123...")
             from guidance.zero123_utils import Zero123
             if self.opt.stable_zero123:
+                print("[INFO] Using Stable Zero123")
                 self.guidance_zero123 = Zero123(self.device, model_key='ashawkey/stable-zero123-diffusers')
             else:
+                print("[INFO] Using Zero123-XL")
                 self.guidance_zero123 = Zero123(self.device, model_key='ashawkey/zero123-xl-diffusers')
             print(f"[INFO] loaded zero123!")
         # input image
@@ -254,14 +256,14 @@ class GUI:
             if self.opt.sample_zero123:
                 ### loss of sampled views from zero123            
                 images = []
-                down_resolution = self.sample_resolution // 1
+                down_resolution = self.sample_res // 1
 
                 # for i, (ver, hor, radius) in enumerate(zip(self.sample_vers, self.sample_hors, self.sample_radii)):
                 for hor in self.sample_hors:
                     for ver in self.sample_vers:
                         pose = orbit_camera(self.opt.elevation + ver, hor, self.opt.radius + self.sample_radius)
                         ssaa = min(2.0, max(0.125, 2 * np.random.random()))
-                        out = self.renderer.render(pose, self.cam.perspective, self.sample_resolution, self.sample_resolution, ssaa=ssaa)
+                        out = self.renderer.render(pose, self.cam.perspective, self.sample_res, self.sample_res, ssaa=ssaa)
 
                         image = out["image"] # [H, W, 3] in [0, 1]
                         valid_mask = ((out["alpha"] > 0) & (out["viewcos"] > 0.5)).detach().permute(2, 0, 1).unsqueeze(0)
@@ -703,7 +705,7 @@ class GUI:
             self.prepare_train()
             start = perf_counter()
             if self.opt.sample_zero123:
-                self.sampled_views = self.sample_zero123()
+                self.sampled_views = self.sample_zero123(save=True)
             print(f'Sampling time: {perf_counter() - start}')
             for i in tqdm.trange(iters):
                 self.train_step()
@@ -711,41 +713,37 @@ class GUI:
         self.save_model()
 
     # sample novel views from zero123
-    def sample_zero123(self):
-        hor_min, hor_max, hor_step = (120, 180, 30)
-        # ver_min, ver_max, ver_step = (-85, 0, 25)
-        self.sample_resolution = 256    # do not change this value
+    def sample_zero123(self, save=False):
+        hor_min, hor_max, hor_step = (90, 180, 30)
+        self.sample_res = 256    # do not change this value
         num_images_per_prompt = self.opt.n_samples
 
         self.sample_hors = list(range(hor_min, hor_max, hor_step)) + list(range(-hor_min, -hor_max, -hor_step)) + [180]
-        # self.sample_vers = list(range(ver_min, ver_max, ver_step)) + list(range(-ver_min, -ver_max, -ver_step)) + [0]
-        self.sample_vers = [15, -15, -45]
-        # self.sample_radii = [0] * len(self.sample_hors)
+        self.sample_vers = [5, -15, -45]
         self.sample_radius = 0
-        
-        # self.sample_resolution = 256    # do not change this value
-        # self.sample_vers = list(range(-90, 90, 15))
-        # self.sample_hors = [180] * len(self.sample_vers)
-        # self.sample_radii = [0] * len(self.sample_hors)
-        # num_images_per_prompt = 3
 
         print(f'[INFO] Sampling {num_images_per_prompt} images for {len(self.sample_hors) * len(self.sample_vers)} views')
 
-        gt_image = F.interpolate(self.input_img_torch, (self.sample_resolution, self.sample_resolution), mode="bilinear", align_corners=False)
+        gt_image = F.interpolate(self.input_img_torch, (self.sample_res, self.sample_res), mode="bilinear", align_corners=False)
         views = []
         
-        # for (ver, hor, radius) in zip(self.sample_vers, self.sample_hors, self.sample_radii):
         for i, hor in enumerate(self.sample_hors):
             for j, ver in enumerate(self.sample_vers):
                 print(f'[{ver}, {hor}]')
                 view = self.guidance_zero123.sample(
-                    gt_image, [ver], [hor], [self.sample_radius], self.sample_resolution, self.sample_resolution,
-                    num_images_per_prompt=num_images_per_prompt  
+                    gt_image, [ver], [hor], [self.sample_radius], 
+                    self.sample_res, self.sample_res, num_images_per_prompt=num_images_per_prompt  
                 )
                 views.append(view)
 
-                # for sample in view:
-                #     to_pil_image(sample.squeeze(0)).save(f'sample_{i}_{j}.jpg')
+                # for k, sample in enumerate(view):
+                #     to_pil_image(sample.squeeze(0)).save(f'sample_{ver}_{hor}_{k}.jpg')
+                #     print(f'Saved to sample_{ver}_{hor}_{k}.jpg')
+
+                if save:
+                    img_avg = torch.stack(view, dim=0).mean(dim=0)
+                    img_avg = to_pil_image(img_avg)
+                    img_avg.save(f'view {i}-{j} avg.jpg')
 
         return views
     

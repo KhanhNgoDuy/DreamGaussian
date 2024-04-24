@@ -1,5 +1,5 @@
 import os
-os.environ['HF_HOME'] = '/mnt/HDD2/khanh/temp/'
+os.environ['HF_HOME'] = '/mnt/HDD3/khanh/temp/'
 
 import sys
 sys.path.append('./')
@@ -31,20 +31,20 @@ def main(cfg):
         callbacks=[PrintCallback()]
     )
     trainer.fit(model, datamodule=dataset)
-    # trainer.test(model, dataset)
+    trainer.test(model, dataset)
 
 
 class TestConfig:
     max_epochs = 5 
     trained_module = 'mid_block'
-    root = "/mnt/HDD2/khanh/content/projects/dreamgaussian/train_zero123/datasets/h3ds_v1"
-    batch_size = 16
-    num_workers = 2
+    root = "/mnt/HDD3/khanh/DreamGaussian/train_zero123/datasets/h3ds_v1"
+    batch_size = 4
+    num_workers = 6
     dataset = 'h3ds_v1'
     transform = None
     dtype = torch.float16
-    device = 'cuda'
-    accumulate_grad_batches = 16
+    device = 'gpu'
+    accumulate_grad_batches = 3
     num_step_per_val = 2
     learning_rate = 1.0e-04
 

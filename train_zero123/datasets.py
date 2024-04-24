@@ -10,35 +10,36 @@ from pathlib import Path
 from PIL import Image
 
 
-class LightningDataWrapper(pl.LightningDataModule):
-    def __init__(self, cfg):
-        super().__init__()
-        self.cfg = cfg
-        self.root = cfg.root
-        self.batch_size = cfg.batch_size
-        self.num_workers = cfg.num_workers
+# class LightningDataWrapper(pl.LightningDataModule):
+#     def __init__(self, cfg):
+#         super().__init__()
+#         self.cfg = cfg
+#         self.root = cfg.root
+#         self.batch_size = cfg.batch_size
+#         print(self.batch_size)
+#         self.num_workers = cfg.num_workers
 
-        if cfg.dataset == "h3ds_v1":
-            self.dataset = H3DSv1
+#         if cfg.dataset == "h3ds_v1":
+#             self.dataset = H3DSv1
 
-    def setup(self, stage):
-        full_ds = self.dataset(self.cfg)
+#     def setup(self, stage):
+#         full_ds = self.dataset(self.cfg)
 
-        if stage == 'fit':
-            train_set_size = int(len(full_ds) * 0.8)
-            val_set_size = int(len(full_ds) * 0.1)
-            test_set_size = len(full_ds) - train_set_size - val_set_size
+#         if stage == 'fit':
+#             train_set_size = int(len(full_ds) * 0.8)
+#             val_set_size = int(len(full_ds) * 0.1)
+#             test_set_size = len(full_ds) - train_set_size - val_set_size
 
-            self.train, self.validate, self.test = random_split(full_ds, [train_set_size, val_set_size, test_set_size])
+#             self.train, self.validate, self.test = random_split(full_ds, [train_set_size, val_set_size, test_set_size])
     
-    def train_dataloader(self):
-        return DataLoader(self.train, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
+#     def train_dataloader(self):
+#         return DataLoader(self.train, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
 
-    def val_dataloader(self):
-        return DataLoader(self.validate, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=False)
+#     def val_dataloader(self):
+#         return DataLoader(self.validate, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=False)
 
-    def test_dataloader(self):
-        return DataLoader(self.test, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=False)
+#     def test_dataloader(self):
+#         return DataLoader(self.test, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=False)
 
 
 class H3DSv1(Dataset):
@@ -48,21 +49,35 @@ class H3DSv1(Dataset):
         self.batch_size = cfg.batch_size
         self.transform = cfg.transform
         self.dtype = cfg.dtype
-        self.device = cfg.device
+        # self.device = cfg.device
 
         self.data = []
+        self.subjects = {}
+        self.all_imgs = []
 
         self._prepare_data()
     
     def _prepare_data(self):
-        for folder in self.root.iterdir():
-            subject = []
+        # for folder in self.root.iterdir():
+        #     subject = []
 
-            for file in folder.glob('*.png'):
-                path = file.as_posix()
-                subject.append(path)
+        #     for file in folder.glob('*.png'):
+        #         path = file.as_posix()
+        #         subject.append(path)
 
-            self.data.append(subject)
+        #     self.data.append(subject)
+
+        for file in self.root.glob('*/*.png'):
+            self.all_imgs.append(file.as_posix())
+        
+        for subject in self.root.iterdir():
+            imgs = []
+            for img in subject.glob('*.png'):
+                imgs.append(img.as_posix())
+            subject = subject.as_posix().split('/')[-1]
+            self.subjects[subject] = imgs
+
+            # self.n_img_per_subj = len(subject.glob('*.png'))
     
     def get_T(self, target_str, cond_str):
         """
@@ -73,23 +88,24 @@ class H3DSv1(Dataset):
         elev_target, azim_target, r_target = self.get_coords(target_str)
         elev_cond, azim_cond, r_cond = self.get_coords(cond_str)
 
-        d_elev = np.deg2rad(elev_target) - np.deg2rad(elev_cond)
-        d_azim = np.deg2rad(azim_target) - np.deg2rad(azim_cond)
-        d_r = np.deg2rad(r_target) - np.deg2rad(r_cond)
+        d_elev = np.deg2rad([elev_target]) - np.deg2rad([elev_cond])
+        d_azim = np.deg2rad([azim_target]) - np.deg2rad([azim_cond])
+        d_r = np.deg2rad([r_target]) - np.deg2rad([r_cond])
         
-        T = np.stack([d_elev.item(), np.sin(d_azim).item(), np.cos(d_azim.item()), d_r.item()], axis=-1)
-        T = torch.from_numpy(T).unsqueeze(1).to(dtype=self.dtype) # [8, 1, 4]       [1, 1, 4]
+        T = np.stack([d_elev, np.sin(d_azim), np.cos(d_azim), d_r], axis=-1)
+        T = torch.from_numpy(T).to(dtype=self.dtype) # [8, 1, 4]       [1, 1, 4]
 
         return T
 
     def __getitem__(self, idx):
-        subject = self.data[idx]
+        subject = self.all_imgs[idx].split('/')[-2]
+        img_list = self.subjects[subject]
         out = []
 
         ## get pair of images and poses
-        target_idx, cond_idx = [random.randint(0, len(subject)) for _ in range(2)]
-        target_str = subject[target_idx]
-        cond_str = subject[cond_idx]
+        target_idx, cond_idx = [random.randint(0, (len(img_list) - 1)) for _ in range(2)]
+        target_str = img_list[target_idx]
+        cond_str = img_list[cond_idx]
 
         # load input and conditional images
         for path in [target_str, cond_str]:
@@ -99,20 +115,51 @@ class H3DSv1(Dataset):
                 img_tensor = self.transform(img_tensor)
             out.append(img_tensor)
 
-        # get pose difference
-        T = self.get_T(target_str, cond_str)
-        out.append(T)
+        # # get pose difference
+        # T = self.get_T(target_str, cond_str)
+        # out.append(T)
+
+        target_pose = self.get_coords(target_str)
+        cond_pose = self.get_coords(cond_str)
+        d_pose = [(i-j) for i, j in zip(target_pose, cond_pose)]
+        d_pose = np.stack(d_pose, axis=-1)
+        d_pose = torch.from_numpy(d_pose).to(dtype=self.dtype)
+        out.append(d_pose)
         
         return out
 
+    # def __getitem__(self, idx):
+    #     subject = self.data[idx]
+    #     out = []
+
+    #     ## get pair of images and poses
+    #     target_idx, cond_idx = [random.randint(0, (len(subject) - 1)) for _ in range(2)]
+    #     target_str = subject[target_idx]
+    #     cond_str = subject[cond_idx]
+
+    #     # load input and conditional images
+    #     for path in [target_str, cond_str]:
+    #         img_tensor = transforms.ToTensor()(Image.open(path)).to(self.dtype)
+    #         img_tensor = vflip(img_tensor)      # Vertically flip for this dataset
+    #         if self.transform:
+    #             img_tensor = self.transform(img_tensor)
+    #         out.append(img_tensor)
+
+    #     # get pose difference
+    #     T = self.get_T(target_str, cond_str)
+    #     out.append(T)
+        
+    #     return out
+
     def __len__(self):
-        return len(self.data)
+        # return len(self.data)
+        return len(self.all_imgs)
 
     def get_coords(self, string):
         """
         Get information of azim, elev, radius from given string
         """
-        radius = 2.33   # hard-coded radius to render h3ds dataset
+        radius = 0   # hard-coded radius to render h3ds dataset
         data = string.split('.')[0].split('/')[-1]
         elev, azim = data.split('_')
         elev, azim = float(elev), float(azim)

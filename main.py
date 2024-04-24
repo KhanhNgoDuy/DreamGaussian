@@ -1,4 +1,5 @@
 import os
+# os.environ['HF_HOME'] = '/mnt/HDD3/khanh/temp/'
 import cv2
 import time
 import tqdm
@@ -80,13 +81,13 @@ class GUI:
         # override if provide a checkpoint
         if self.opt.load is not None:
             self.renderer.initialize(self.opt.load)            
-        elif self.opt.use_head_template:
-            # initialize gaussians from a default head template
-            print(f'[INFO] initialize from {self.opt.default_head_template}')
-            self.renderer.initialize_default_head(
-                num_pts=self.opt.num_pts,
-                default_head_template=self.opt.default_head_template
-            )
+        # elif self.opt.use_head_template:
+        #     # initialize gaussians from a default head template
+        #     print(f'[INFO] initialize from {self.opt.default_head_template}')
+        #     self.renderer.initialize_default_head(
+        #         num_pts=self.opt.num_pts,
+        #         default_head_template=self.opt.default_head_template
+        #     )
         else:
             # initialize gaussians to a blob
             print(f'[INFO] initialize to a unit sphere')
@@ -293,8 +294,8 @@ class GUI:
             if self.enable_zero123:
                 sds_loss = self.opt.lambda_zero123 * self.guidance_zero123.train_step(images, vers, hors, radii, step_ratio=step_ratio if self.opt.anneal_timestep else None, default_elevation=self.opt.elevation)
             
-            loss = 1 * l1_loss \
-                + 0 * mse_loss \
+            loss = 0 * l1_loss \
+                + 1 * mse_loss \
                 + 1 * vgg_face_loss \
                 + 1 * mask_loss \
                 + 1 * sds_loss
